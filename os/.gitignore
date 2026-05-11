@@ -1,0 +1,6 @@
+target/
+.DS_Store
+bootloader/
+opensbi.bin
+*.bin
+*.lock
