@@ -48,33 +48,10 @@ __alltraps:
 
 __restore:
     # restore TrapContext
-    mv sp, a0
+    # 注释掉下面这一行
+    # mv sp, a0
 
     # restore sstatus and sepc
     ld t0, 32*8(sp)
     ld t1, 33*8(sp)
     ld t2, 2*8(sp)
-
-    csrw sstatus, t0
-    csrw sepc, t1
-    csrw sscratch, t2
-
-    # restore general-purpose registers
-    ld x1, 1*8(sp)
-    ld x3, 3*8(sp)
-
-    # restore x5 ~ x31
-    .set n, 5
-    .rept 27
-        LOAD_GP %n
-        .set n, n+1
-    .endr
-
-    # release TrapContext
-    addi sp, sp, 34*8
-
-    # switch back to user stack
-    csrrw sp, sscratch, sp
-
-    # return to user mode
-    sret

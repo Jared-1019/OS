@@ -56,7 +56,7 @@ pub fn trap_handler(
                 "[kernel] PageFault in application, core dumped."
             );
 
-            run_next_app();
+            // run_next_app();
         }
 
         Trap::Exception(Exception::IllegalInstruction) => {
@@ -64,7 +64,7 @@ pub fn trap_handler(
                 "[kernel] IllegalInstruction in application, core dumped."
             );
 
-            run_next_app();
+            // run_next_app();
         }
 
         _ => {
