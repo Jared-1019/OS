@@ -6,7 +6,6 @@ pub enum TaskStatus {
     Exited,
 }
 
-
 #[derive(Copy, Clone)]
 pub struct TaskControlBlock {
     pub task_cx_ptr: usize,
@@ -18,4 +17,3 @@ impl TaskControlBlock {
         &self.task_cx_ptr as *const usize
     }
 }
-
