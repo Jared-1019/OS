@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(panic_info_message)]
 #![feature(alloc_error_handler)]
 
 use core::arch::global_asm;
@@ -32,8 +33,8 @@ fn clear_bss() {
     }
     unsafe {
         core::slice::from_raw_parts_mut(
-            sbss as *const () as usize as *mut u8,
-            ebss as *const () as usize - sbss as *const () as usize,
+            sbss as usize as *mut u8,
+            ebss as usize - sbss as usize,
         ).fill(0);
     }
 }
@@ -45,9 +46,13 @@ pub fn rust_main() -> ! {
     mm::init();
     println!("[kernel] back to world!");
     mm::remap_test();
+    task::add_initproc();
+    println!("after initproc!");
     trap::init();
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
-    task::run_first_task();
+    loader::list_apps();
+    task::run_tasks();
     panic!("Unreachable in rust_main!");
 }
+

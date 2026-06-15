@@ -32,8 +32,8 @@ extern "C" {
 
 lazy_static! {
     pub static ref KERNEL_SPACE: Arc<UPSafeCell<MemorySet>> = Arc::new(unsafe {
-        UPSafeCell::new(MemorySet::new_kernel()
-    )});
+        UPSafeCell::new(MemorySet::new_kernel())
+    });
 }
 
 pub struct MemorySet {
@@ -60,6 +60,15 @@ impl MemorySet {
             permission,
         ), None);
     }
+
+    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
+        if let Some((idx, area)) = self.areas.iter_mut().enumerate()
+            .find(|(_, area)| area.vpn_range.get_start() == start_vpn) {
+            area.unmap(&mut self.page_table);
+            self.areas.remove(idx);
+        }
+    }
+
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
@@ -71,7 +80,7 @@ impl MemorySet {
     fn map_trampoline(&mut self) {
         self.page_table.map(
             VirtAddr::from(TRAMPOLINE).into(),
-            PhysAddr::from(strampoline as *const () as usize).into(),
+            PhysAddr::from(strampoline as usize).into(),
             PTEFlags::R | PTEFlags::X,
         );
     }
@@ -81,41 +90,41 @@ impl MemorySet {
         // map trampoline
         memory_set.map_trampoline();
         // map kernel sections
-        println!(".text [{:#x}, {:#x})", stext as *const () as usize, etext as *const () as usize);
-        println!(".rodata [{:#x}, {:#x})", srodata as *const () as usize, erodata as *const () as usize);
-        println!(".data [{:#x}, {:#x})", sdata as *const () as usize, edata as *const () as usize);
-        println!(".bss [{:#x}, {:#x})", sbss_with_stack as *const () as usize, ebss as *const () as usize);
+        println!(".text [{:#x}, {:#x})", stext as usize, etext as usize);
+        println!(".rodata [{:#x}, {:#x})", srodata as usize, erodata as usize);
+        println!(".data [{:#x}, {:#x})", sdata as usize, edata as usize);
+        println!(".bss [{:#x}, {:#x})", sbss_with_stack as usize, ebss as usize);
         println!("mapping .text section");
         memory_set.push(MapArea::new(
-            (stext as *const () as usize).into(),
-            (etext as *const () as usize).into(),
+            (stext as usize).into(),
+            (etext as usize).into(),
             MapType::Identical,
             MapPermission::R | MapPermission::X,
         ), None);
         println!("mapping .rodata section");
         memory_set.push(MapArea::new(
-            (srodata as *const () as usize).into(),
-            (erodata as *const () as usize).into(),
+            (srodata as usize).into(),
+            (erodata as usize).into(),
             MapType::Identical,
             MapPermission::R,
         ), None);
         println!("mapping .data section");
         memory_set.push(MapArea::new(
-            (sdata as *const () as usize).into(),
-            (edata as *const () as usize).into(),
+            (sdata as usize).into(),
+            (edata as usize).into(),
             MapType::Identical,
             MapPermission::R | MapPermission::W,
         ), None);
         println!("mapping .bss section");
         memory_set.push(MapArea::new(
-            (sbss_with_stack as *const () as usize).into(),
-            (ebss as *const () as usize).into(),
+            (sbss_with_stack as usize).into(),
+            (ebss as usize).into(),
             MapType::Identical,
             MapPermission::R | MapPermission::W,
         ), None);
         println!("mapping physical memory");
         memory_set.push(MapArea::new(
-            (ekernel as *const () as usize).into(),
+            (ekernel as usize).into(),
             MEMORY_END.into(),
             MapType::Identical,
             MapPermission::R | MapPermission::W,
@@ -179,6 +188,25 @@ impl MemorySet {
         ), None);
         (memory_set, user_stack_top, elf.header.pt2.entry_point() as usize)
     }
+
+    pub fn from_existed_user(user_space: &MemorySet) -> MemorySet {
+        let mut memory_set = Self::new_bare();
+        // map trampoline
+        memory_set.map_trampoline();
+        // copy data sections/trap_context/user_stack
+        for area in user_space.areas.iter() {
+            let new_area = MapArea::from_another(area);
+            memory_set.push(new_area, None);
+            // copy data from another space
+            for vpn in area.vpn_range {
+                let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                dst_ppn.get_bytes_array().copy_from_slice(src_ppn.get_bytes_array());
+            }
+        }
+        memory_set
+    }
+
     pub fn activate(&self) {
         let satp = self.page_table.token();
         unsafe {
@@ -188,6 +216,10 @@ impl MemorySet {
     }
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
+    }
+
+    pub fn recycle_data_pages(&mut self) {
+        self.areas.clear();
     }
 }
 
@@ -214,6 +246,16 @@ impl MapArea {
             map_perm,
         }
     }
+
+    pub fn from_another(another: &MapArea) -> Self {
+        Self {
+            vpn_range: VPNRange::new(another.vpn_range.get_start(), another.vpn_range.get_end()),
+            data_frames: BTreeMap::new(),
+            map_type: another.map_type,
+            map_perm: another.map_perm,
+        }
+    }
+
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         let ppn: PhysPageNum;
         match self.map_type {
@@ -229,7 +271,7 @@ impl MapArea {
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         page_table.map(vpn, ppn, pte_flags);
     }
-    #[allow(unused)]
+    
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         match self.map_type {
             MapType::Framed => {
@@ -244,7 +286,7 @@ impl MapArea {
             self.map_one(page_table, vpn);
         }
     }
-    #[allow(unused)]
+    
     pub fn unmap(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
             self.unmap_one(page_table, vpn);
@@ -292,9 +334,9 @@ bitflags! {
 #[allow(unused)]
 pub fn remap_test() {
     let mut kernel_space = KERNEL_SPACE.exclusive_access();
-    let mid_text: VirtAddr = ((stext as *const () as usize + etext as *const () as usize) / 2).into();
-    let mid_rodata: VirtAddr = ((srodata as *const () as usize + erodata as *const () as usize) / 2).into();
-    let mid_data: VirtAddr = ((sdata as *const () as usize + edata as *const () as usize) / 2).into();
+    let mid_text: VirtAddr = ((stext as usize + etext as usize) / 2).into();
+    let mid_rodata: VirtAddr = ((srodata as usize + erodata as usize) / 2).into();
+    let mid_data: VirtAddr = ((sdata as usize + edata as usize) / 2).into();
     assert_eq!(
         kernel_space.page_table.translate(mid_text.floor()).unwrap().writable(),
         false
@@ -309,3 +351,4 @@ pub fn remap_test() {
     );
     println!("remap_test passed!");
 }
+
